@@ -1,0 +1,19 @@
+{
+  "name": "seepv-telegram-bot",
+  "version": "1.0.0",
+  "description": "Bot Telegram SEEPV v11.7 - análisis de córners en vivo",
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "openai": "^4.0.0",
+    "telegraf": "^4.16.3",
+    "dotenv": "^16.4.5",
+    "node-telegram-bot-api": "^0.66.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
