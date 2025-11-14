@@ -1,7 +1,6 @@
 const TelegramBot = require("node-telegram-bot-api");
 const OpenAI = require("openai");
 require("dotenv").config();
-}
 
 // ---------------------
 // OpenAI
@@ -22,6 +21,9 @@ const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, {
     }
   } 
 });
+
+console.log("✅ SEEPV_Bot iniciado, esperando mensajes...");
+
 
 // Manejo de errores de polling
 bot.on('polling_error', (error) => {
@@ -519,4 +521,5 @@ process.on('uncaughtException', (error) => {
   gracefulShutdown('UNCAUGHT_EXCEPTION');
 });
 }
+
 
