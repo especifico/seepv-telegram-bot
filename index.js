@@ -237,6 +237,88 @@ if (cSingle) {
 
   return state;
 }
+function parseStateFromText(text, prevState) {
+  const state = prevState
+    ? { ...prevState }
+    : {
+        minute: null,
+        score: null,   // { home, away }
+        corners: null, // { home, away, total }
+        lineMain: null,
+        oddsOver: null,
+        oddsUnder: null,
+      };
+
+  // MINUTO: 74', 74 m, min 74
+  const mMatch = text.match(/(\d+)\s*(?:'|m|min)/i);
+  if (mMatch) {
+    state.minute = parseInt(mMatch[1], 10);
+  }
+
+  // CÓRNERS PRIMERO (más específico): C/3-2, c:3-2, Córners 3-2
+  let cMatch =
+    text.match(/c[\/:]\s*(\d+)\s*[-:]\s*(\d+)/i) ||
+    text.match(/c[óo]rners?\s+(\d+)\s*[-:]\s*(\d+)/i);
+
+  if (cMatch) {
+    const h = parseInt(cMatch[1], 10);
+    const a = parseInt(cMatch[2], 10);
+    if (!Number.isNaN(h) && !Number.isNaN(a)) {
+      state.corners = {
+        home: h,
+        away: a,
+        total: h + a,
+      };
+    }
+  } else {
+    // Córners totales SOLO si el número NO está seguido por "-x" ni ":x"
+    const cSingle =
+      text.match(/c[óo]rners?\s+(\d+)(?![-:]\d+)/i) ||
+      text.match(/(\d+)\s*c[óo]rners?(?![-:]\d+)/i);
+
+    if (cSingle) {
+      const total = parseInt(cSingle[1], 10);
+      // Protección anti disparates tipo 1003
+      if (!Number.isNaN(total) && total > 0 && total <= 50) {
+        state.corners = {
+          home: null,
+          away: null,
+          total,
+        };
+      }
+    }
+  }
+
+  // MARCADOR genérico: 0-1, 2-2 (solo si NO ya interpretamos córners)
+  if (!state.corners || (state.corners.home === null && state.corners.away === null)) {
+    const scoreMatch = text.match(/(\d+)\s*-\s*(\d+)/);
+    if (scoreMatch) {
+      const a = parseInt(scoreMatch[1], 10);
+      const b = parseInt(scoreMatch[2], 10);
+      // Evitar scores absurdos y solo si no tenemos córners estructurados
+      if (!state.score && a + b <= 20) {
+        state.score = { home: a, away: b };
+      }
+    }
+  }
+
+  // LÍNEAS Y CUOTAS: Más de (10.5) 1.42 / Menos de (10.5) 2.55
+  const overMatch = text.match(/m[aá]s de\s*\(([\d.,]+)\)\s*([\d.,]+)/i);
+  if (overMatch) {
+    state.lineMain = normNumber(overMatch[1]);
+    state.oddsOver = normNumber(overMatch[2]);
+  }
+
+  const underMatch = text.match(/menos de\s*\(([\d.,]+)\)\s*([\d.,]+)/i);
+  if (underMatch) {
+    if (state.lineMain == null) {
+      state.lineMain = normNumber(underMatch[1]);
+    }
+    state.oddsUnder = normNumber(underMatch[2]);
+  }
+
+  return state;
+}
 
 function hasStructuredInfo(state) {
   if (!state) return false;
@@ -448,4 +530,5 @@ process.on('uncaughtException', (error) => {
   console.error('❌ Uncaught Exception:', error);
   gracefulShutdown('UNCAUGHT_EXCEPTION');
 });
+
 
