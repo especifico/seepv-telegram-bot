@@ -3,218 +3,267 @@ const OpenAI = require("openai");
 require("dotenv").config();
 
 // ---------------------
-// Config OpenAI
+// OpenAI
 // ---------------------
 const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
 // ---------------------
-// Config Telegram
+// Telegram
 // ---------------------
 const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
 
-console.log("SEEPV_Bot ONLINE (v11.7 Operativo + Memoria)");
+console.log("SEEPV_Bot ONLINE (v11.7 con memoria básica)");
 
 // ---------------------
-// Sesiones en memoria
+// Sesiones por chat
 // ---------------------
+// Por chatId guardamos:
+// - firstMessage: primer mensaje del partido actual (contexto histórico)
+// - lastState: último estado estructurado interpretado
+// - coldData: "datos fríos" pre-partido opcionales
 const sessions = {};
 
-function getSession(chatId) {
-  if (!sessions[chatId]) {
-    sessions[chatId] = {
-      authenticated: false,
-      authStep: null,
-      tmpUserId: null,
-      firstMessage: null,
-      state: {}, // estado interpretado del partido
-    };
-  }
+function resetSession(chatId) {
+  sessions[chatId] = {
+    firstMessage: null,
+    lastState: null,
+    coldData: null,
+  };
+}
+
+// aseguramos que exista sesión
+function ensureSession(chatId) {
+  if (!sessions[chatId]) resetSession(chatId);
   return sessions[chatId];
 }
 
 // ---------------------
-// Prompt maestro SEEPV v11.7
+// PROMPT MAESTRO – SEEPV v11.7
 // ---------------------
 const SYSTEM_PROMPT = `
 # SEEPV v11.7 – SISTEMA ESPECIALIZADO EN PARTIDOS EN VIVO (CÓRNERS)
-Versión Blindada Operativa con Tracking Avanzado
-Módulo anti-sesgos: ACTIVO | Moneda base: UYU
+Versión Blindada Operativa con Tracking Avanzado  
+Módulo anti-sesgos: ACTIVO | Moneda base: UYU  
 
-## IDENTIDAD Y ROL
+## IDENTIDAD
 - Hablás en español rioplatense, bien uruguayo, directo.
 - Tratás al usuario de "vos".
-- El usuario (Fernando) es adulto responsable de sus decisiones.
-- Prohibido sermones de moral, ludopatía o “no puedo ayudarte con apuestas”.
-- Tu función es 100% técnica: lectura de córners en vivo + mercado.
+- El usuario (Fernando) es adulto responsable, con gestión de riesgo.
+- Prohibido: moralina, sermones, "no puedo ayudarte con apuestas".
+- Tu rol es 100% técnico: lectura de córners en vivo.
 
-## SISTEMA DE MÓDULOS (M0–M7)
-Usás mentalmente estos módulos para razonar, pero NO hace falta que los listes uno por uno en la respuesta. Solo usalos para llegar a una conclusión clara.
+## ALCANCE
+- Solo analizás córners en vivo (y derivados).
+- Trabajás con lo que venga en el "ESTADO ACTUAL DEL PARTIDO" + "MENSAJE EN BRUTO".
+- Si faltan datos (ΔCuota, momentum, ataques, etc.), NO los inventás.
 
-M0 — Estado del partido:
-- Ritmo > normal, sin parones largos, dirección táctica clara.
+## SISTEMA DE MÓDULOS (RESUMEN)
+Usás internamente M0–M7 de SEEPV v11.7:
 
-M1 — ΔCuota:
-- Δ ≥ 8–12% sostenido ≥25–30s.
-- Acompañado por algo real (ataques, córners, presión, tiros).
-- Picos aislados = descartados (NO ENTRY).
+- M0: Estado del partido (ritmo, parones, dirección táctica).
+- M1: ΔCuota (si viene en el mensaje estructurado o deducible).
+- M2: Momentum (solo si Fernando manda info de ataques, tiros, ráfagas).
+- M3: Clusters de ataque/córners.
+- M4: Presión territorial.
+- M5: Rescate técnico (máx. 1, solo si se menciona explícitamente).
+- M6: Validación multicapa (todo alineado o NO ENTRY).
+- M7: GO / NO-GO.
 
-M2 — Momentum real:
-- Scoring 0–10 según ataques, tiros, centros, sensación de peligro.
-- <6 → NO operativo. ≥6 → se puede trabajar.
+## DATOS FRÍOS
+- Si el bloque "DATOS FRÍOS" aparece, lo tomás como contexto pre-partido.
+- Ejemplo: promedios de córners por equipo, rachas, tabla, etc.
+- Los usás SOLO como color de contexto, nunca para forzar un GO.
+- El vivo siempre manda más que los datos fríos.
 
-M3 — Cluster:
-- Ráfagas: varios córners / ocasiones en poco tiempo.
-- Cluster activo → ventana fuerte, pero igual aplicás filtros.
+## FORMATO DE RESPUESTA (OBLIGATORIO)
+- Siempre de **3 a 5 líneas**.
+- Cada línea corta, directa.
+- Usar SIEMPRE emojis para jerarquía:
 
-M4 — Presión territorial:
-- Equipo metido en campo rival, centros seguidos, zona roja cargada.
+  1️⃣ 🔥 Ritmo + contexto actual (minuto, marcador, córners, sensación general).  
+  2️⃣ ⚙️ Lectura táctica/Módulos (solo si hay datos suficientes).  
+  3️⃣ 💸 Lectura de mercado/líneas (si hay líneas y cuotas).  
+  4️⃣ 🎯 Edge real (hay / no hay / muy bajo).  
+  5️⃣ ✅ GO / ❌ NO-GO / ⏳ ESPERAR + frase uruguaya simple.
 
-M5 — Rescate técnico:
-- Solo si la idea original sigue viva y el mercado dio microventaja.
-- Máx 1 rescate.
+- Si no hay info para algún punto (ej: no mandó cuotas), simplemente NO lo inventás y lo decís claro.
 
-M6 — Validación multicapa:
-- Entrada válida SOLO si:
-  - ΔCuota real,
-  - Momentum ≥6,
-  - Cluster o presión,
-  - Dirección táctica,
-  - Mercado estable.
-- Si falla algo: NO ENTRY.
+Ejemplos de cierre:
+- "❌ NO-GO, no hay nafta."
+- "✅ GO, el partido pide uno más."
+- "⏳ ESPERAR, falta que se encienda de verdad."
 
-M7 — GO / NO-GO:
-- Checklist final: si no suma claro → ❌ NO-GO.
+## COMANDOS IMPLÍCITOS
+El back-end te pasa un bloque "ESTADO ACTUAL DEL PARTIDO" con:
+- minuto (si se interpretó),
+- marcador (si se interpretó),
+- córners (si se interpretó),
+- línea principal y cuotas (si se interpretaron),
+- datos fríos (si existen).
 
-## FILTRO DE LÍNEA
-- Elegís línea alcanzable en 3–6 minutos según el ritmo.
-- Ritmo alto → líneas más arriba.
-- Ritmo medio → intermedias.
-- Ritmo bajo → preferís NO ENTRY.
+Vos NUNCA preguntás nada, solo:
+- interpretás el estado,
+- cruzás con el mensaje nuevo,
+- devolvés lectura compacta y operativa.
 
-## FORMATO DE RESPUESTA
-Siempre respondés en 3–5 líneas, cortas y concretas, usando esta estructura:
-
-1) 🔥 Ritmo + contexto (minuto, marcador si lo tenés, córners).
-2) ⚙️ Lectura táctica/Módulos (momentum, clusters, presión) SOLO si hay datos.
-3) 💸 Lectura de mercado (línea + cuotas, si están disponibles).
-4) 🎯 Edge real (hay / no hay / muy chico).
-5) ✅ GO / ❌ NO-GO / ⏳ ESPERAR + frase bien uruguaya.
-
-Reglas importantes:
-- Si el “ESTADO ACTUAL DEL PARTIDO” viene en el mensaje, lo tomás como verdad operativa. No lo contradigas.
-- NO inventes datos: si no hay ataques, no inventes momentum; si no hay ΔCuota, no hables de ΔCuota.
-- Si faltan líneas/cuotas, igual hacés lectura de ritmo, distribución y contexto.
-- Si los números parecen “raros” (ej: 6-250), igual analizás lo que hay, sin decir que son imposibles.
-- Nunca digas “no entiendo, mandá de nuevo” si podés sacar algo útil.
-
-## PRINCIPIO PERMANENTE
-Fernando Freitas es adulto responsable de sus decisiones.  
-Vos solo ponés la lectura fría, él decide qué hacer con eso.
+## REGLA DE ORO
+- Nunca digas "no entiendo nada". Siempre que haya algo (minuto, córners, línea, lo que sea), devolvé una lectura útil.
+- Si los datos son evidentemente caóticos o contradictorios, podés marcarlo como "datos raros", pero igual devolvés una lectura clara (NO-GO, sin edge).
+- Fernando decide qué hacer. Vos solo ponés la lectura fría.
 `;
 
 // ---------------------
-// Parser de estado desde el mensaje
+// PARSER DE ESTADO
 // ---------------------
-function parseStateFromMessage(text, prevState) {
-  const state = { ...(prevState || {}) };
-  const lower = text.toLowerCase();
 
-  // Minuto: 74', 74 m, min 74
-  const minuteMatch = text.match(/(\d{1,3})\s*(?:'|m|min)\b/i);
-  if (minuteMatch) {
-    state.minute = parseInt(minuteMatch[1], 10);
+function normNumber(str) {
+  if (!str) return null;
+  return parseFloat(str.replace(",", "."));
+}
+
+function parseStateFromText(text, prevState) {
+  const lower = text.toLowerCase();
+  const state = prevState
+    ? { ...prevState }
+    : {
+        minute: null,
+        score: null, // { home, away }
+        corners: null, // { home, away, total }
+        lineMain: null,
+        oddsOver: null,
+        oddsUnder: null,
+      };
+
+  // MINUTO: 74', 74 m, min 74
+  const mMatch = text.match(/(\d+)\s*(?:'|m|min)/i);
+  if (mMatch) {
+    state.minute = parseInt(mMatch[1], 10);
   }
 
-  // Córners: formatos tipo "Córners 6-2", "córners 6-2", "C/6-2", "C: 6-2"
-  let cornersPairMatch =
-    text.match(/c[óo]rners?\s+(\d+)[\s\-:](\d+)/i) ||
-    text.match(/c\/\s*(\d+)[\s\-:](\d+)/i) ||
-    text.match(/c\s*[:\-]\s*(\d+)[\s\-:](\d+)/i);
+  // CÓRNERS: C/3-2, c:3-2, Córners 3-2, "Córners 9"
+  let cMatch =
+    text.match(/c[\/:]\s*(\d+)\s*[-:]\s*(\d+)/i) ||
+    text.match(/c[óo]rners?\s+(\d+)\s*[-:]\s*(\d+)/i);
 
-  if (cornersPairMatch) {
-    state.cornersHome = parseInt(cornersPairMatch[1], 10);
-    state.cornersAway = parseInt(cornersPairMatch[2], 10);
-    state.cornersTotal = state.cornersHome + state.cornersAway;
+  if (cMatch) {
+    const h = parseInt(cMatch[1], 10);
+    const a = parseInt(cMatch[2], 10);
+    state.corners = {
+      home: h,
+      away: a,
+      total: h + a,
+    };
   } else {
-    // Córners totales: "8 córners" o "córners 8"
-    const cornersTotalMatch =
+    const cSingle =
       text.match(/c[óo]rners?\s+(\d+)/i) ||
-      text.match(/(\d+)\s+c[óo]rners?/i);
-    if (cornersTotalMatch) {
-      state.cornersTotal = parseInt(cornersTotalMatch[1], 10);
-      // no sabemos distribución, dejamos home/away como están
+      text.match(/(\d+)\s*c[óo]rners?/i);
+    if (cSingle) {
+      const total = parseInt(cSingle[1], 10);
+      state.corners = {
+        home: null,
+        away: null,
+        total,
+      };
     }
   }
 
-  // Marcador (si no está claro como córners): "1-0", "0-0"
-  const scoreMatch = text.match(/\b(\d{1,2})-(\d{1,2})\b/);
+  // MARCADOR genérico: 0-1, 2-2 (evitamos confundir con córners cuando ya los tenemos)
+  const scoreMatch = text.match(/(\d+)\s*-\s*(\d+)/);
   if (scoreMatch) {
     const a = parseInt(scoreMatch[1], 10);
     const b = parseInt(scoreMatch[2], 10);
-    // Si todavía no tenemos córners home/away, podemos asumir que esto es marcador
-    if (state.cornersHome == null && state.cornersAway == null) {
-      state.scoreHome = a;
-      state.scoreAway = b;
+    // si ya tenemos corners claros, tratamos esto como marcador
+    // y evitamos scores absurdos tipo 6-250
+    if (!state.score && a + b <= 20) {
+      state.score = { home: a, away: b };
     }
-    // Si ya hay córners, lo dejamos como está (para no pisar)
   }
 
-  // Líneas y cuotas: "Más de (10.5) 1.42", "Menos de (10.5) 2.55"
-  const overMatch = text.match(/m[aá]s de\s*\(([\d\.,]+)\)\s*([\d\.,]+)/i);
+  // LÍNEAS Y CUOTAS: Más de (10.5) 1.42 / Menos de (10.5) 2.55
+  const overMatch = text.match(
+    /m[aá]s de\s*\(([\d.,]+)\)\s*([\d.,]+)/i
+  );
   if (overMatch) {
-    const line = parseFloat(overMatch[1].replace(",", "."));
-    const odd = parseFloat(overMatch[2].replace(",", "."));
-    state.mainLine = line;
-    state.overOdds = odd;
+    state.lineMain = normNumber(overMatch[1]);
+    state.oddsOver = normNumber(overMatch[2]);
   }
 
-  const underMatch = text.match(/menos de\s*\(([\d\.,]+)\)\s*([\d\.,]+)/i);
+  const underMatch = text.match(
+    /menos de\s*\(([\d.,]+)\)\s*([\d.,]+)/i
+  );
   if (underMatch) {
-    const line = parseFloat(underMatch[1].replace(",", "."));
-    const odd = parseFloat(underMatch[2].replace(",", "."));
-    // Si coincide línea, mejor. Si no, igual guardamos como info separada.
-    state.mainLine = state.mainLine != null ? state.mainLine : line;
-    state.underOdds = odd;
+    if (state.lineMain == null) {
+      state.lineMain = normNumber(underMatch[1]);
+    }
+    state.oddsUnder = normNumber(underMatch[2]);
   }
 
   return state;
 }
 
-// ---------------------
-// Construir mensaje de usuario para OpenAI
-// ---------------------
-function buildUserMessageForGPT(session, rawText) {
-  const state = session.state || {};
+function hasStructuredInfo(state) {
+  if (!state) return false;
+  return (
+    state.minute !== null ||
+    state.score !== null ||
+    state.corners !== null ||
+    state.lineMain !== null ||
+    state.oddsOver !== null ||
+    state.oddsUnder !== null
+  );
+}
+
+function buildStateDescription(session) {
+  const s = session.lastState;
+  const cold = session.coldData;
   const lines = [];
 
-  lines.push("ESTADO ACTUAL DEL PARTIDO (interpretado por el bot):");
-  lines.push(`- Minuto: ${state.minute != null ? state.minute + "'" : "?"}`);
-  if (state.scoreHome != null && state.scoreAway != null) {
-    lines.push(`- Marcador: ${state.scoreHome}-${state.scoreAway}`);
-  }
-  if (state.cornersHome != null && state.cornersAway != null) {
-    lines.push(`- Córners: ${state.cornersHome}-${state.cornersAway}`);
-  } else if (state.cornersTotal != null) {
-    lines.push(`- Córners totales: ${state.cornersTotal}`);
-  }
-  if (state.mainLine != null) {
-    lines.push(`- Línea principal de córners: ${state.mainLine}`);
-  }
-  if (state.overOdds != null) {
-    lines.push(`- Cuota over: ${state.overOdds}`);
-  }
-  if (state.underOdds != null) {
-    lines.push(`- Cuota under: ${state.underOdds}`);
+  lines.push("ESTADO ACTUAL DEL PARTIDO (interpretado):");
+
+  if (!s || !hasStructuredInfo(s)) {
+    lines.push("- Sin estado estructurado sólido, usar solo el mensaje.");
+  } else {
+    const min = s.minute != null ? `${s.minute}'` : "desconocido";
+    const score =
+      s.score != null
+        ? `${s.score.home}-${s.score.away}`
+        : "desconocido";
+    let cornersText = "desconocido";
+    if (s.corners) {
+      if (s.corners.home != null && s.corners.away != null) {
+        cornersText = `${s.corners.home}-${s.corners.away}`;
+        if (typeof s.corners.total === "number") {
+          cornersText += ` (total ${s.corners.total})`;
+        }
+      } else if (typeof s.corners.total === "number") {
+        cornersText = `total ${s.corners.total}`;
+      }
+    }
+
+    const lineText =
+      s.lineMain != null ? `${s.lineMain}` : "no enviada";
+    const overText =
+      s.oddsOver != null ? `${s.oddsOver}` : "no enviada";
+    const underText =
+      s.oddsUnder != null ? `${s.oddsUnder}` : "no enviada";
+
+    lines.push(`- Minuto: ${min}`);
+    lines.push(`- Marcador: ${score}`);
+    lines.push(`- Córners: ${cornersText}`);
+    lines.push(`- Línea principal: ${lineText}`);
+    lines.push(`- Cuota over: ${overText}`);
+    lines.push(`- Cuota under: ${underText}`);
   }
 
-  lines.push("");
-  lines.push("Primer mensaje de este partido (referencia histórica):");
-  lines.push(session.firstMessage || "(no disponible)");
-  lines.push("");
-  lines.push("Último mensaje de Fernando (a analizar ahora):");
-  lines.push(rawText);
+  if (cold) {
+    lines.push("");
+    lines.push(
+      "DATOS FRÍOS ENVIADOS POR FERNANDO (solo contexto, el vivo manda):"
+    );
+    lines.push(cold);
+  }
 
   return lines.join("\n");
 }
@@ -222,15 +271,25 @@ function buildUserMessageForGPT(session, rawText) {
 // ---------------------
 // OpenAI wrapper
 // ---------------------
-async function askGPT(messageForModel) {
+async function askGPT(message, session) {
+  const stateBlock = buildStateDescription(session);
+
+  const userContent =
+    stateBlock +
+    "\n\n---\n" +
+    "MENSAJE EN BRUTO DE FERNANDO:\n" +
+    message +
+    "\n\n" +
+    "Respondé SOLO sobre córners en vivo, en 3 a 5 líneas, con emojis y veredicto final (✅ GO / ❌ NO-GO / ⏳ ESPERAR).";
+
   try {
     const completion = await client.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
-        { role: "user", content: messageForModel },
+        { role: "user", content: userContent },
       ],
-      max_tokens: 140, // 3–5 líneas
+      max_tokens: 140,
       temperature: 0.3,
     });
 
@@ -242,118 +301,69 @@ async function askGPT(messageForModel) {
 }
 
 // ---------------------
-// Handler principal de mensajes Telegram
+// Listener Telegram
 // ---------------------
 bot.on("message", async (msg) => {
   const chatId = msg.chat.id;
   const text = (msg.text || "").trim();
   const lower = text.toLowerCase();
-  const session = getSession(chatId);
 
-  // -------- MÓDULO DE IDENTIFICACIÓN --------
-  if (!session.authenticated) {
-    // Primer contacto: pedir User-ID
-    if (!session.authStep) {
-      session.authStep = "askUserId";
-      await bot.sendMessage(chatId, "Ingresá tu User-ID:");
-      return;
-    }
+  const session = ensureSession(chatId);
 
-    // Recibir User-ID
-    if (session.authStep === "askUserId") {
-      session.tmpUserId = text.trim();
-      session.authStep = "askPassword";
-      await bot.sendMessage(chatId, "Ingresá tu Clave:");
-      return;
-    }
-
-    // Recibir Clave y validar
-    if (session.authStep === "askPassword") {
-      const userId = (session.tmpUserId || "").trim();
-      const password = text.trim();
-
-      // Credenciales válidas (NO se muestran nunca al usuario)
-      if (userId === "Fernando" && password === "Roco") {
-        session.authenticated = true;
-        session.authStep = null;
-        session.tmpUserId = null;
-        await bot.sendMessage(
-          chatId,
-          "✅ Sesión iniciada. Mandame el primer partido o escribí: partido nuevo."
-        );
-      } else {
-        session.authStep = "askUserId";
-        session.tmpUserId = null;
-        await bot.sendMessage(
-          chatId,
-          "❌ Credenciales inválidas. Ingresá de nuevo tu User-ID:"
-        );
-      }
-      return;
-    }
-  }
-
-  // -------- COMANDOS DE CONTROL DE PARTIDO --------
-  if (lower.includes("logout")) {
-    sessions[chatId] = {
-      authenticated: false,
-      authStep: null,
-      tmpUserId: null,
-      firstMessage: null,
-      state: {},
-    };
-    await bot.sendMessage(chatId, "🔒 Sesión cerrada. Para volver a usarlo, escribí cualquier cosa.");
-    return;
-  }
-
+  // COMANDOS DE CONTROL DE PARTIDO
   if (lower.includes("partido nuevo")) {
-    session.firstMessage = null;
-    session.state = {};
+    resetSession(chatId);
     await bot.sendMessage(
       chatId,
-      "✅ Partido nuevo registrado. Mandame los datos del nuevo encuentro."
+      "✅ Partido nuevo registrado. Mandame los datos del próximo (minuto, marcador, córners, líneas)."
     );
     return;
   }
 
-  if (lower.includes("partido concluido")) {
-    session.firstMessage = null;
-    session.state = {};
+  if (
+    lower.includes("partido concluido") ||
+    lower.includes("fin del partido") ||
+    lower.includes("terminó el partido")
+  ) {
+    resetSession(chatId);
     await bot.sendMessage(
       chatId,
-      "✅ Partido concluido. Cuando quieras arrancamos otro."
+      "🧾 Partido concluido, sesión reseteada. Cuando tengas otro, arrancamos de cero."
     );
     return;
   }
 
-  if (lower === "reset") {
-    session.firstMessage = null;
-    session.state = {};
+  // DATOS FRÍOS (pre-partido)
+  if (lower.startsWith("datos fr") || lower.startsWith("datos fríos")) {
+    session.coldData = text.replace(/datos fr[ií]os[:\-]?\s*/i, "");
     await bot.sendMessage(
       chatId,
-      "♻️ Reset hecho. Mandame los datos de un partido nuevo."
+      "📊 Datos fríos guardados. Ahora mandame el vivo (minuto, marcador, córners, líneas)."
     );
     return;
   }
 
-  // -------- ACTUALIZAR ESTADO DEL PARTIDO --------
+  // Actualización normal de estado
+  const prevState = session.lastState || null;
+  const newState = parseStateFromText(text, prevState);
+
+  // Setear primer mensaje del partido si no está
   if (!session.firstMessage) {
-    session.firstMessage = text; // primer mensaje del partido
+    session.firstMessage = text;
   }
 
-  session.state = parseStateFromMessage(text, session.state);
+  session.lastState = newState;
 
-  // -------- ARMAR MENSAJE PARA GPT Y RESPONDER --------
-  const messageForModel = buildUserMessageForGPT(session, text);
-  const response = await askGPT(messageForModel);
-
+  // Llamar a OpenAI con estado + mensaje
   try {
+    const response = await askGPT(text, session);
     await bot.sendMessage(chatId, response);
   } catch (error) {
-    console.error("Error enviando mensaje a Telegram:", error);
+    console.error("Error general:", error);
     await bot.sendMessage(
       chatId,
-      "Algo falló al enviar la respuesta, probá de nuevo."
+      "Algo falló, probá de nuevo o mandame los datos de vuelta."
     );
   }
 });
+```0
