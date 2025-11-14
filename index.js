@@ -198,11 +198,6 @@ if (cSingle) {
     };
   }
 }
-
-      };
-    }
-  }
-
   // MARCADOR genérico: 0-1, 2-2 (solo si NO ya interpretamos córners)
   if (!state.corners || (state.corners.home === null && state.corners.away === null)) {
     const scoreMatch = text.match(/(\d+)\s*-\s*(\d+)/);
@@ -530,5 +525,6 @@ process.on('uncaughtException', (error) => {
   console.error('❌ Uncaught Exception:', error);
   gracefulShutdown('UNCAUGHT_EXCEPTION');
 });
+
 
 
