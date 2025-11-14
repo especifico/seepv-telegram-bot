@@ -1,13 +1,6 @@
 const TelegramBot = require("node-telegram-bot-api");
 const OpenAI = require("openai");
 require("dotenv").config();
-
-// ---------------------
-// VALIDACIÓN DE VARIABLES DE ENTORNO
-// ---------------------
-if (!process.env.OPENAI_API_KEY || !process.env.TELEGRAM_BOT_TOKEN) {
-  console.error("❌ ERROR: Faltan variables de entorno (OPENAI_API_KEY o TELEGRAM_BOT_TOKEN)");
-  process.exit(1);
 }
 
 // ---------------------
@@ -526,3 +519,4 @@ process.on('uncaughtException', (error) => {
   gracefulShutdown('UNCAUGHT_EXCEPTION');
 });
 }
+
