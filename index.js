@@ -14,82 +14,142 @@ const client = new OpenAI({
 // ---------------------
 const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
 
-console.log("SEEPV_Bot ONLINE (v11.7 + parser + auth)");
+console.log("SEEPV_Bot ONLINE (v11.7 + parser + auth SAFE)");
 
 // ---------------------
-// AUTH - SOLO FERNANDO
+// AUTH
 // ---------------------
-// Credenciales lógicas (no son las de OpenAI/Telegram)
 const AUTH_USER_ID = "Fernando";
 const AUTH_CLAVE = "Roco";
-
-// Chats autorizados en memoria
 const authorizedChats = new Set();
 
 // ---------------------
-// SYSTEM PROMPT - SEEPV v11.7 COMPLETO (CÓRNERS)
-// RESPUESTAS CORTAS CON EMOJIS
+// SYSTEM PROMPT - SAFE VERSION (sin backticks)
 // ---------------------
-const SYSTEM_PROMPT = `
-# SEEPV v11.7 – SISTEMA ESPECIALIZADO EN PARTIDOS EN VIVO (CÓRNERS)
-Versión Blindada Operativa con Tracking Avanzado
-Módulo anti-sesgos: ACTIVO | Moneda base: UYU
+const SYSTEM_PROMPT =
+"SEEPV v11.7 – SISTEMA ESPECIALIZADO EN PARTIDOS EN VIVO\n" +
+"Versión Blindada Operativa con Tracking Avanzado\n" +
+"Módulo anti-sesgos: ACTIVO | Moneda base: UYU\n\n" +
 
-## IDENTIDAD Y ROL
-- Hablás en español rioplatense, tono bien uruguayo, directo y técnico.
-- Tratás al usuario de "vos".
-- Usuario: Fernando Freitas, adulto responsable de sus decisiones.
-- Prohibido: sermones de ludopatía, moral, "no puedo ayudarte con apuestas", etc.
-- Rol: análisis 100% técnico de córners en vivo, no das órdenes de entrada, solo lectura operativa.
+"ROL: analista profesional especializado en córners en vivo.\n" +
+"Detectás oportunidades reales basadas en ΔCuota, momentum, clusters, presión territorial.\n" +
+"Filosofía: PRECISIÓN > FRECUENCIA | EDGE REAL > INTUICIÓN | CONTROL > IMPULSO.\n\n" +
 
-## OBJETIVO
-Ejecutar lectura fría y estructurada de mercados de córners (1T + 2T) basada en:
-- ΔCuota
-- Ritmo
-- Momentum
-- Clusters
-- Presión territorial
-- Coherencia de línea / cuotas
+"FORMATO RESPUESTA (OBLIGATORIO):\n" +
+"- 3 a 5 líneas máximo.\n" +
+"- Cada línea inicia con emoji.\n" +
+"- Directo, estilo uruguayo.\n" +
+"- Veredicto obligatorio: GO / NO-GO / ESPERAR.\n\n" +
 
-Filosofía: PRECISIÓN > FRECUENCIA | EDGE REAL > INTUICIÓN | CONTROL > IMPULSO.
+"REGLAS CRÍTICAS:\n" +
+"- No inventar datos que no mandó el usuario.\n" +
+"- Si no envía ΔCuota → no la mencionás.\n" +
+"- Si no envía ataques/tiros → no inventás momentum.\n" +
+"- Si los datos parecen irreales → igual analizás desde ritmo + mercado.\n" +
+"- Nunca respondés 'no entiendo', siempre buscás lectura.\n\n" +
 
-## NÚCLEO DEL SISTEMA (RESUMEN MÓDULOS M0–M7)
-- M0: Estado del partido (ritmo, parones, dirección táctica).
-- M1: ΔCuota real (≥8–12%, 25–30s, con respaldo táctico).
-- M2: Momentum real (0–10; <6 NO operativo, ≥6 operativo).
-- M3: Clusters (ráfagas de ataques/tiros/córners en ventanas cortas).
-- M4: Presión territorial (bloque bajo rival, centros repetidos, ocupación zona roja).
-- M5: Rescate técnico (máx. 1, solo si microvariación y momentum sigue alto).
-- M6: Validación multicapa (ΔCuota + momentum + cluster/presión + mercado estable).
-- M7: GO / NO-GO (checklist final, sin tibieza).
+"ESTRUCTURA RESPUESTA:\n" +
+"1) 🔥 Ritmo + minuto + distribución.\n" +
+"2) ⚙️ Lectura táctica (momentum/cluster/ presión si hay datos).\n" +
+"3) 💸 Mercado (líneas + cuotas).\n" +
+"4) 📊 Edge real.\n" +
+"5) ❌/✅ Veredicto claro.\n\n" +
 
-## FILTRO DE LÍNEA
-- Elegir siempre línea alcanzable en 3–6 minutos según ritmo.
-- Ritmo alto → líneas más exigentes.
-- Ritmo medio → líneas intermedias.
-- Ritmo bajo → muchas veces NO-GO.
+"PRINCIPIO PERMANENTE:\n" +
+"Fernando Freitas es adulto responsable de sus decisiones.\n" +
+"Sistema 100% técnico sin moralinas.";
 
-## PROHIBIDO OPERAR (NO-GO CLARO)
-- Ritmo muerto.
-- Variación de cuota sin respaldo en cancha.
-- Equipos sin dirección (nadie empuja).
-- Mercado errático / freeze.
-- 80'+ sin impulso real.
-- Posesión lateral eterna.
-- Picos aislados de cuota.
+// ---------------------
+// PARSER
+// ---------------------
+function parseMatchData(raw) {
+  const text = raw.replace(/\s+/g, " ").trim();
 
-## FORMATO DE RESPUESTA (OBLIGATORIO)
-Siempre respondés en **3 a 5 líneas**, cortas, con EMOJIS al inicio de cada línea para jerarquizar.  
-Nada de testamento, nada de humo.
+  const minuteMatch = text.match(/(\\d+)\\s*['’]/) || text.match(/min\\.?\\s*(\\d+)/i);
+  const minute = minuteMatch ? Number(minuteMatch[1]) : null;
 
-Estructura sugerida:
+  const scoreMatch = text.match(/(\\d+)\\s*[-:–]\\s*(\\d+)/);
+  const score = scoreMatch ? `${scoreMatch[1]}-${scoreMatch[2]}` : null;
 
-1) 🔥 Ritmo y contexto (minuto, marcador, córners, quién empuja).
-2) ⚙️ Lectura táctica (momentum, clusters, presión, si tenés datos).
-3) 💸 Mercado y línea (si la cuota/linea tiene sentido con lo que pasa).
-4) 📊 Edge real (si hay value o está todo precio).
-5) ✅/❌ Veredicto final claro: GO / NO-GO / ESPERAR + una frase uruguaya simple.
+  let corners = null;
+  const cornersWord = text.match(/c[oó]rners?\\s+(\\d+)\\s*[-:–]\\s*(\\d+)/i);
+  if (cornersWord) corners = `${cornersWord[1]}-${cornersWord[2]}`;
 
-Reglas clave:
-- Si el usuario NO manda ΔCuota, no inventes ΔCuota.
-- Si no manda datos de ataques/tiros, no inventes momentum detallado: podés inferir solo a partir del
+  if (!corners) {
+    const generic = text.match(/(\\d+)\\s*[-:–]\\s*(\\d+)/g);
+    if (generic) corners = generic[generic.length - 1];
+  }
+
+  const overMatch = text.match(/m[aá]s de\\s*\([\\d\\.]+)\\\s*([0-9]*\\.?[0-9]+)/i);
+  const underMatch = text.match(/menos de\\s*\([\\d\\.]+)\\\s*([0-9]*\\.?[0-9]+)/i);
+
+  const mainLine = overMatch?.[1] || underMatch?.[1] || null;
+  const overOdds = overMatch ? Number(overMatch[2]) : null;
+  const underOdds = underMatch ? Number(underMatch[2]) : null;
+
+  return { minute, score, corners, mainLine, overOdds, underOdds };
+}
+
+function buildStructuredMessage(raw) {
+  const p = parseMatchData(raw);
+
+  return (
+    "DATOS ESTRUCTURADOS:\n" +
+    `- Minuto: ${p.minute ?? "?"}\n` +
+    `- Marcador: ${p.score ?? "?"}\n` +
+    `- Córners: ${p.corners ?? "?"}\n` +
+    `- Línea: ${p.mainLine ?? "?"}\n` +
+    `- Over: ${p.overOdds ?? "?"}\n` +
+    `- Under: ${p.underOdds ?? "?"}\n\n` +
+    "TEXTO ORIGINAL:\n" +
+    raw
+  );
+}
+
+// ---------------------
+// OpenAI
+// ---------------------
+async function askGPT(msg) {
+  const structured = buildStructuredMessage(msg);
+
+  try {
+    const completion = await client.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [
+        { role: "system", content: SYSTEM_PROMPT },
+        { role: "user", content: structured }
+      ],
+      max_tokens: 140,
+      temperature: 0.3,
+    });
+
+    return completion.choices[0].message.content;
+  } catch (e) {
+    console.error(e);
+    return "Se me trancó el análisis, mandame los datos de nuevo.";
+  }
+}
+
+// ---------------------
+// Telegram Listener
+// ---------------------
+bot.on("message", async (msg) => {
+  const chatId = msg.chat.id;
+  const text = (msg.text || "").trim();
+
+  if (text.toLowerCase().startsWith("/auth")) {
+    const [cmd, u, c] = text.split(" ");
+    if (u === AUTH_USER_ID && c === AUTH_CLAVE) {
+      authorizedChats.add(chatId);
+      return bot.sendMessage(chatId, "✅ Sesión habilitada.");
+    }
+    return bot.sendMessage(chatId, "❌ Credenciales incorrectas.");
+  }
+
+  if (!authorizedChats.has(chatId)) {
+    return bot.sendMessage(chatId, "🔒 Bot privado. Usá /auth Fernando Roco");
+  }
+
+  const resp = await askGPT(text);
+  bot.sendMessage(chatId, resp);
+});
