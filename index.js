@@ -2,6 +2,18 @@ const TelegramBot = require("node-telegram-bot-api");
 const OpenAI = require("openai");
 require("dotenv").config();
 
+// DEBUG de variables de entorno (no muestra claves, solo true/false)
+console.log("DEBUG OPENAI_API_KEY presente:", !!process.env.OPENAI_API_KEY);
+console.log("DEBUG TELEGRAM_BOT_TOKEN presente:", !!process.env.TELEGRAM_BOT_TOKEN);
+
+// ---------------------
+// VALIDACIÓN DE VARIABLES DE ENTORNO
+// ---------------------
+if (!process.env.OPENAI_API_KEY || !process.env.TELEGRAM_BOT_TOKEN) {
+  console.error("❌ ERROR: Faltan variables de entorno (OPENAI_API_KEY o TELEGRAM_BOT_TOKEN)");
+  process.exit(1);
+}
+
 // ---------------------
 // OpenAI
 // ---------------------
@@ -22,13 +34,15 @@ const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, {
   } 
 });
 
+console.log("🟢 SEEPV_Bot iniciado, esperando mensajes...");
+
 // Manejo de errores de polling
-bot.on('polling_error', (error) => {
-  console.error('❌ Polling error:', error.code, error.message);
+bot.on("polling_error", (error) => {
+  console.error("❌ Polling error:", error.code, error.message);
 });
 
-bot.on('error', (error) => {
-  console.error('❌ Bot error:', error);
+bot.on("error", (error) => {
+  console.error("❌ Bot error:", error);
 });
 
 console.log("✅ SEEPV_Bot ONLINE (v11.7 con memoria básica)");
@@ -50,7 +64,6 @@ function resetSession(chatId) {
   };
 }
 
-// aseguramos que exista sesión
 function ensureSession(chatId) {
   if (!sessions[chatId]) resetSession(chatId);
   return sessions[chatId];
@@ -59,7 +72,7 @@ function ensureSession(chatId) {
 // ---------------------
 // PROMPT MAESTRO – SEEPV v11.7
 // ---------------------
-const SYSTEM_PROMPT = 
+const SYSTEM_PROMPT = `
 # SEEPV v11.7 – SISTEMA ESPECIALIZADO EN PARTIDOS EN VIVO (CÓRNERS)
 Versión Blindada Operativa con Tracking Avanzado  
 Módulo anti-sesgos: ACTIVO | Moneda base: UYU  
@@ -129,7 +142,7 @@ Vos NUNCA preguntás nada, solo:
 - Nunca digas "no entiendo nada". Siempre que haya algo (minuto, córners, línea, lo que sea), devolvé una lectura útil.
 - Si los datos son evidentemente caóticos o contradictorios, podés marcarlo como "datos raros", pero igual devolvés una lectura clara (NO-GO, sin edge).
 - Fernando decide qué hacer. Vos solo ponés la lectura fría.
-;
+`;
 
 // ---------------------
 // PARSER DE ESTADO
@@ -141,12 +154,11 @@ function normNumber(str) {
 }
 
 function parseStateFromText(text, prevState) {
-  const lower = text.toLowerCase();
   const state = prevState
     ? { ...prevState }
     : {
         minute: null,
-        score: null, // { home, away }
+        score: null,   // { home, away }
         corners: null, // { home, away, total }
         lineMain: null,
         oddsOver: null,
@@ -167,23 +179,28 @@ function parseStateFromText(text, prevState) {
   if (cMatch) {
     const h = parseInt(cMatch[1], 10);
     const a = parseInt(cMatch[2], 10);
-    state.corners = {
-      home: h,
-      away: a,
-      total: h + a,
-    };
+    if (!Number.isNaN(h) && !Number.isNaN(a)) {
+      state.corners = {
+        home: h,
+        away: a,
+        total: h + a,
+      };
+    }
   } else {
-    // Córners totales: "Córners 9"
+    // Córners totales SOLO si el número NO está seguido por "-x" ni ":x"
     const cSingle =
-      text.match(/c[óo]rners?\s+(\d+)/i) ||
-      text.match(/(\d+)\s*c[óo]rners?/i);
+      text.match(/c[óo]rners?\s+(\d+)(?![-:]\d+)/i) ||
+      text.match(/(\d+)\s*c[óo]rners?(?![-:]\d+)/i);
+
     if (cSingle) {
       const total = parseInt(cSingle[1], 10);
-      state.corners = {
-        home: null,
-        away: null,
-        total,
-      };
+      if (total > 0 && total <= 50) {
+        state.corners = {
+          home: null,
+          away: null,
+          total,
+        };
+      }
     }
   }
 
@@ -193,7 +210,6 @@ function parseStateFromText(text, prevState) {
     if (scoreMatch) {
       const a = parseInt(scoreMatch[1], 10);
       const b = parseInt(scoreMatch[2], 10);
-      // Evitar scores absurdos y solo si no tenemos córners estructurados
       if (!state.score && a + b <= 20) {
         state.score = { home: a, away: b };
       }
@@ -201,17 +217,13 @@ function parseStateFromText(text, prevState) {
   }
 
   // LÍNEAS Y CUOTAS: Más de (10.5) 1.42 / Menos de (10.5) 2.55
-  const overMatch = text.match(
-    /m[aá]s de\s*\(([\d.,]+)\)\s*([\d.,]+)/i
-  );
+  const overMatch = text.match(/m[aá]s de\s*\(([\d.,]+)\)\s*([\d.,]+)/i);
   if (overMatch) {
     state.lineMain = normNumber(overMatch[1]);
     state.oddsOver = normNumber(overMatch[2]);
   }
 
-  const underMatch = text.match(
-    /menos de\s*\(([\d.,]+)\)\s*([\d.,]+)/i
-  );
+  const underMatch = text.match(/menos de\s*\(([\d.,]+)\)\s*([\d.,]+)/i);
   if (underMatch) {
     if (state.lineMain == null) {
       state.lineMain = normNumber(underMatch[1]);
@@ -244,36 +256,36 @@ function buildStateDescription(session) {
   if (!s || !hasStructuredInfo(s)) {
     lines.push("- Sin estado estructurado sólido, usar solo el mensaje.");
   } else {
-    const min = s.minute != null ? ${s.minute}' : "desconocido";
+    const min = s.minute != null ? `${s.minute}'` : "desconocido";
     const score =
       s.score != null
-        ? ${s.score.home}-${s.score.away}
+        ? `${s.score.home}-${s.score.away}`
         : "desconocido";
     let cornersText = "desconocido";
     if (s.corners) {
       if (s.corners.home != null && s.corners.away != null) {
-        cornersText = ${s.corners.home}-${s.corners.away};
+        cornersText = `${s.corners.home}-${s.corners.away}`;
         if (typeof s.corners.total === "number") {
-          cornersText +=  (total ${s.corners.total});
+          cornersText += ` (total ${s.corners.total})`;
         }
       } else if (typeof s.corners.total === "number") {
-        cornersText = total ${s.corners.total};
+        cornersText = `total ${s.corners.total}`;
       }
     }
 
     const lineText =
-      s.lineMain != null ? ${s.lineMain} : "no enviada";
+      s.lineMain != null ? `${s.lineMain}` : "no enviada";
     const overText =
-      s.oddsOver != null ? ${s.oddsOver} : "no enviada";
+      s.oddsOver != null ? `${s.oddsOver}` : "no enviada";
     const underText =
-      s.oddsUnder != null ? ${s.oddsUnder} : "no enviada";
+      s.oddsUnder != null ? `${s.oddsUnder}` : "no enviada";
 
-    lines.push(- Minuto: ${min});
-    lines.push(- Marcador: ${score});
-    lines.push(- Córners: ${cornersText});
-    lines.push(- Línea principal: ${lineText});
-    lines.push(- Cuota over: ${overText});
-    lines.push(- Cuota under: ${underText});
+    lines.push(`- Minuto: ${min}`);
+    lines.push(`- Marcador: ${score}`);
+    lines.push(`- Córners: ${cornersText}`);
+    lines.push(`- Línea principal: ${lineText}`);
+    lines.push(`- Cuota over: ${overText}`);
+    lines.push(`- Cuota under: ${underText}`);
   }
 
   if (cold) {
@@ -305,25 +317,28 @@ async function askGPT(message, session) {
   const timeout = setTimeout(() => controller.abort(), 25000); // 25 segundos
 
   try {
-    const completion = await client.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
-        { role: "system", content: SYSTEM_PROMPT },
-        { role: "user", content: userContent },
-      ],
-      max_tokens: 140,
-      temperature: 0.3,
-    }, { signal: controller.signal });
+    const completion = await client.chat.completions.create(
+      {
+        model: "gpt-4o-mini",
+        messages: [
+          { role: "system", content: SYSTEM_PROMPT },
+          { role: "user", content: userContent },
+        ],
+        max_tokens: 140,
+        temperature: 0.3,
+      },
+      { signal: controller.signal }
+    );
 
     clearTimeout(timeout);
     return completion.choices[0].message.content;
   } catch (err) {
     clearTimeout(timeout);
-    
-    if (err.name === 'AbortError') {
+
+    if (err.name === "AbortError") {
       return "⏱️ Se pasó el tiempo, mandame los datos de vuelta.";
     }
-    
+
     console.error("❌ Error en OpenAI:", err);
     return "Se me trancó el análisis, mandame los datos de nuevo.";
   }
@@ -400,35 +415,29 @@ bot.on("message", async (msg) => {
 // ---------------------
 // SHUTDOWN GRACEFUL
 // ---------------------
-process.once('SIGINT', () => gracefulShutdown('SIGINT'));
-process.once('SIGTERM', () => gracefulShutdown('SIGTERM'));
-
 async function gracefulShutdown(signal) {
-  console.log(\n${signal} recibido, cerrando bot...);
-  
+  console.log(`\n${signal} recibido, cerrando bot...`);
+
   try {
-    // Detener polling de Telegram
     await bot.stopPolling();
-    console.log('✅ Polling de Telegram cerrado');
-    
-    // Opcional: guardar sesiones si usás persistencia
-    // await guardarSesiones(sessions);
-    
-    console.log('✅ SEEPV_Bot cerrado correctamente');
+    console.log("✅ Polling de Telegram cerrado");
+
+    console.log("✅ SEEPV_Bot cerrado correctamente");
     process.exit(0);
   } catch (err) {
-    console.error('❌ Error en shutdown:', err);
+    console.error("❌ Error en shutdown:", err);
     process.exit(1);
   }
 }
 
-// Capturar errores no manejados
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('❌ Unhandled Rejection:', reason);
-  // No cerrar el proceso, solo loggear
+process.once("SIGINT", () => gracefulShutdown("SIGINT"));
+process.once("SIGTERM", () => gracefulShutdown("SIGTERM"));
+
+process.on("unhandledRejection", (reason) => {
+  console.error("❌ Unhandled Rejection:", reason);
 });
 
-process.on('uncaughtException', (error) => {
-  console.error('❌ Uncaught Exception:', error);
-  gracefulShutdown('UNCAUGHT_EXCEPTION');
+process.on("uncaughtException", (error) => {
+  console.error("❌ Uncaught Exception:", error);
+  gracefulShutdown("UNCAUGHT_EXCEPTION");
 });
