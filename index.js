@@ -181,16 +181,24 @@ function parseStateFromText(text, prevState) {
       total: h + a,
     };
   } else {
-    // Córners totales: "Córners 9"
-    const cSingle =
-      text.match(/c[óo]rners?\s+(\d+)/i) ||
-      text.match(/(\d+)\s*c[óo]rners?/i);
-    if (cSingle) {
-      const total = parseInt(cSingle[1], 10);
-      state.corners = {
-        home: null,
-        away: null,
-        total,
+    // Córners totales SOLO si el número NO está seguido por "-x" ni ":x"
+const cSingle =
+  text.match(/c[óo]rners?\s+(\d+)(?![-:]\d+)/i) ||
+  text.match(/(\d+)\s*c[óo]rners?(?![-:]\d+)/i);
+
+if (cSingle) {
+  const total = parseInt(cSingle[1], 10);
+
+  // Protección extra anti-valores absurdos
+  if (total <= 50) {
+    state.corners = {
+      home: null,
+      away: null,
+      total,
+    };
+  }
+}
+
       };
     }
   }
@@ -440,3 +448,4 @@ process.on('uncaughtException', (error) => {
   console.error('❌ Uncaught Exception:', error);
   gracefulShutdown('UNCAUGHT_EXCEPTION');
 });
+
