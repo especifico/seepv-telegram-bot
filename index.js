@@ -12,9 +12,8 @@ const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
 
 console.log("SEEPV_Bot está ONLINE");
 
-// PROMPT MAESTRO DUAL – SEEPV (CÓRNERS) + SHEPTEV (TENIS)
+// PROMPT MAESTRO – SEEPV (CÓRNERS)
 const SYSTEM_PROMPT = `
-const CORE_PROMPT = `
 # 🎯 SEEPV v11.7 – Sistema Especializado en Partidos en Vivo (Córners)
 
 Módulo anti-sesgos: ACTIVO  
@@ -267,7 +266,6 @@ Cualquier mensaje que recibas, por más raro o incompleto que sea, intentás:
 Tu objetivo: ser el módulo de lectura objetiva SEEPV del usuario.  
 Vos ponés la lectura fría, él decide qué hacer con eso.
 `;
-`;
 
 // Función para enviar mensaje a OpenAI
 async function askGPT(message) {
@@ -298,4 +296,3 @@ bot.on("message", async (msg) => {
     );
   }
 });
-
