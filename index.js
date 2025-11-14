@@ -3,6 +3,14 @@ const OpenAI = require("openai");
 require("dotenv").config();
 
 // ---------------------
+// VALIDACIÓN DE VARIABLES DE ENTORNO
+// ---------------------
+if (!process.env.OPENAI_API_KEY || !process.env.TELEGRAM_BOT_TOKEN) {
+  console.error("❌ ERROR: Faltan variables de entorno (OPENAI_API_KEY o TELEGRAM_BOT_TOKEN)");
+  process.exit(1);
+}
+
+// ---------------------
 // OpenAI
 // ---------------------
 const client = new OpenAI({
@@ -12,9 +20,26 @@ const client = new OpenAI({
 // ---------------------
 // Telegram
 // ---------------------
-const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
+const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { 
+  polling: {
+    interval: 300,
+    autoStart: true,
+    params: {
+      timeout: 10
+    }
+  } 
+});
 
-console.log("SEEPV_Bot ONLINE (v11.7 con memoria básica)");
+// Manejo de errores de polling
+bot.on('polling_error', (error) => {
+  console.error('❌ Polling error:', error.code, error.message);
+});
+
+bot.on('error', (error) => {
+  console.error('❌ Bot error:', error);
+});
+
+console.log("✅ SEEPV_Bot ONLINE (v11.7 con memoria básica)");
 
 // ---------------------
 // Sesiones por chat
@@ -100,7 +125,7 @@ El back-end te pasa un bloque "ESTADO ACTUAL DEL PARTIDO" con:
 - minuto (si se interpretó),
 - marcador (si se interpretó),
 - córners (si se interpretó),
-- línea principal y cuotas (si se interpretaron),
+- línea principal y cuotas (si se interpretó),
 - datos fríos (si existen).
 
 Vos NUNCA preguntás nada, solo:
@@ -142,7 +167,7 @@ function parseStateFromText(text, prevState) {
     state.minute = parseInt(mMatch[1], 10);
   }
 
-  // CÓRNERS: C/3-2, c:3-2, Córners 3-2, "Córners 9"
+  // CÓRNERS PRIMERO (más específico): C/3-2, c:3-2, Córners 3-2
   let cMatch =
     text.match(/c[\/:]\s*(\d+)\s*[-:]\s*(\d+)/i) ||
     text.match(/c[óo]rners?\s+(\d+)\s*[-:]\s*(\d+)/i);
@@ -156,6 +181,7 @@ function parseStateFromText(text, prevState) {
       total: h + a,
     };
   } else {
+    // Córners totales: "Córners 9"
     const cSingle =
       text.match(/c[óo]rners?\s+(\d+)/i) ||
       text.match(/(\d+)\s*c[óo]rners?/i);
@@ -169,15 +195,16 @@ function parseStateFromText(text, prevState) {
     }
   }
 
-  // MARCADOR genérico: 0-1, 2-2 (evitamos confundir con córners cuando ya los tenemos)
-  const scoreMatch = text.match(/(\d+)\s*-\s*(\d+)/);
-  if (scoreMatch) {
-    const a = parseInt(scoreMatch[1], 10);
-    const b = parseInt(scoreMatch[2], 10);
-    // si ya tenemos corners claros, tratamos esto como marcador
-    // y evitamos scores absurdos tipo 6-250
-    if (!state.score && a + b <= 20) {
-      state.score = { home: a, away: b };
+  // MARCADOR genérico: 0-1, 2-2 (solo si NO ya interpretamos córners)
+  if (!state.corners || (state.corners.home === null && state.corners.away === null)) {
+    const scoreMatch = text.match(/(\d+)\s*-\s*(\d+)/);
+    if (scoreMatch) {
+      const a = parseInt(scoreMatch[1], 10);
+      const b = parseInt(scoreMatch[2], 10);
+      // Evitar scores absurdos y solo si no tenemos córners estructurados
+      if (!state.score && a + b <= 20) {
+        state.score = { home: a, away: b };
+      }
     }
   }
 
@@ -269,7 +296,7 @@ function buildStateDescription(session) {
 }
 
 // ---------------------
-// OpenAI wrapper
+// OpenAI wrapper con timeout
 // ---------------------
 async function askGPT(message, session) {
   const stateBlock = buildStateDescription(session);
@@ -282,6 +309,9 @@ async function askGPT(message, session) {
     "\n\n" +
     "Respondé SOLO sobre córners en vivo, en 3 a 5 líneas, con emojis y veredicto final (✅ GO / ❌ NO-GO / ⏳ ESPERAR).";
 
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 25000); // 25 segundos
+
   try {
     const completion = await client.chat.completions.create({
       model: "gpt-4o-mini",
@@ -291,11 +321,18 @@ async function askGPT(message, session) {
       ],
       max_tokens: 140,
       temperature: 0.3,
-    });
+    }, { signal: controller.signal });
 
+    clearTimeout(timeout);
     return completion.choices[0].message.content;
   } catch (err) {
-    console.error("Error en OpenAI:", err);
+    clearTimeout(timeout);
+    
+    if (err.name === 'AbortError') {
+      return "⏱️ Se pasó el tiempo, mandame los datos de vuelta.";
+    }
+    
+    console.error("❌ Error en OpenAI:", err);
     return "Se me trancó el análisis, mandame los datos de nuevo.";
   }
 }
@@ -333,9 +370,10 @@ bot.on("message", async (msg) => {
     return;
   }
 
-  // DATOS FRÍOS (pre-partido)
+  // DATOS FRÍOS (pre-partido) con límite de caracteres
   if (lower.startsWith("datos fr") || lower.startsWith("datos fríos")) {
-    session.coldData = text.replace(/datos fr[ií]os[:\-]?\s*/i, "");
+    const coldText = text.replace(/datos fr[ií]os[:\-]?\s*/i, "");
+    session.coldData = coldText.slice(0, 500); // límite de 500 caracteres
     await bot.sendMessage(
       chatId,
       "📊 Datos fríos guardados. Ahora mandame el vivo (minuto, marcador, córners, líneas)."
@@ -359,11 +397,46 @@ bot.on("message", async (msg) => {
     const response = await askGPT(text, session);
     await bot.sendMessage(chatId, response);
   } catch (error) {
-    console.error("Error general:", error);
+    console.error("❌ Error general:", error);
     await bot.sendMessage(
       chatId,
       "Algo falló, probá de nuevo o mandame los datos de vuelta."
     );
   }
 });
-```0
+
+// ---------------------
+// SHUTDOWN GRACEFUL
+// ---------------------
+process.once('SIGINT', () => gracefulShutdown('SIGINT'));
+process.once('SIGTERM', () => gracefulShutdown('SIGTERM'));
+
+async function gracefulShutdown(signal) {
+  console.log(`\n${signal} recibido, cerrando bot...`);
+  
+  try {
+    // Detener polling de Telegram
+    await bot.stopPolling();
+    console.log('✅ Polling de Telegram cerrado');
+    
+    // Opcional: guardar sesiones si usás persistencia
+    // await guardarSesiones(sessions);
+    
+    console.log('✅ SEEPV_Bot cerrado correctamente');
+    process.exit(0);
+  } catch (err) {
+    console.error('❌ Error en shutdown:', err);
+    process.exit(1);
+  }
+}
+
+// Capturar errores no manejados
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('❌ Unhandled Rejection:', reason);
+  // No cerrar el proceso, solo loggear
+});
+
+process.on('uncaughtException', (error) => {
+  console.error('❌ Uncaught Exception:', error);
+  gracefulShutdown('UNCAUGHT_EXCEPTION');
+});
